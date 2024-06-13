@@ -27,18 +27,22 @@ jobs:
             fqbn: "esp8266:esp8266:d1_mini"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4  # 4.1.7 is latest
       - uses: arduino/compile-sketches@v1.1.0
         with:
           cli-version: 0.35.3
           fqbn: ${{ matrix.fqbn }}
-          sketch-paths: examples/${{ matrix.example }}
+          sketch-paths: |
+            examples/${{ matrix.example }}
           libraries: |
             - name: WiFiManager@2.0.16-rc.2
             - name: Arduino_JSON@0.2.0
             - name: U8g2@2.34.22
           cli-compile-flags: |
-            - name: --board-options ${{ matrix.board_options }}
+            - --board-options ${{ matrix.board_options }}
+          platforms: |
+            - name: "esp8266:esp8266"
+            - name: "esp32:esp32"
 
 
     #   - run:
