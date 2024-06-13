@@ -4,12 +4,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example:
-          - "BASIC"
-          - "TestCO2"
-          - "TestPM"
-          - "TestSht"
-          - "OneOpenAir"
+        example: |
+          - BASIC
+          - TestCO2
+          - TestPM
+          - TestSht
+          - OneOpenAir
         fqbn:
           - "esp8266:esp8266:d1_mini"
           - "esp32:esp32:esp32c3"
