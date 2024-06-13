@@ -30,8 +30,8 @@ jobs:
             fqbn: "esp8266:esp8266:d1_mini"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4  # 4.1.7 is latest
-      - uses: arduino/compile-sketches@v1.1.0
+      - uses: actions/checkout@v2  # 4.1.7 is latest
+      - uses: arduino/compile-sketches@v1
         with:
           cli-version: 0.35.3
           fqbn: ${{ matrix.fqbn }}
@@ -42,7 +42,8 @@ jobs:
             - name: Arduino_JSON@0.2.0
             - name: U8g2@2.34.22
           cli-compile-flags: |
-            - --board-options ${{ matrix.board_options }}
+            - --board-options
+            - ${{ matrix.board_options }}
           platforms: |
             - name: ${{ matrix.core }}
               version: ${{ matrix.core_version}}
