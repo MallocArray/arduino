@@ -15,11 +15,13 @@ jobs:
           - "esp32:esp32:esp32c3"
         include:
           - fqbn: "esp8266:esp8266:d1_mini"
-            core: "esp8266:esp8266@3.1.2"
+            core: "esp8266:esp8266"
+            core_version: "@3.1.2"
             core_url: "https://arduino.esp8266.com/stable/package_esp8266com_index.json"
           - fqbn: "esp32:esp32:esp32c3"
+            core: "esp32:esp32"
+            core_version: "@2.0.11"
             board_options: "JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=min_spiffs,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,DebugLevel=verbose,EraseFlash=none"
-            core: "esp32:esp32@2.0.11"
         exclude:
           - example: "BASIC"
             fqbn: "esp32:esp32:esp32c3"
@@ -39,13 +41,15 @@ jobs:
             - name: Arduino_JSON@0.2.0
             - name: U8g2@2.34.22
           cli-compile-flags: |
-            - --board-options ${{ matrix.board_options }}
+            - --board-options
+            - ${{ matrix.board_options }}
           platforms: |
-            # - name: ${{ matrix.core }}
-            # - source-url: ${{ matrix.core_url }}
-            - name: esp8266:esp8266
-              version: 3.1.2
-              source-url: "https://arduino.esp8266.com/stable/package_esp8266com_index.json"
+            - name: ${{ matrix.core }}
+              version: ${{ matrix.core_version}}
+              source-url: ${{ matrix.core_url }}
+            # - name: esp8266:esp8266
+            #   version: 3.1.2
+            #   source-url: "https://arduino.esp8266.com/stable/package_esp8266com_index.json"
 
 
     #   - run:
