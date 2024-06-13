@@ -47,7 +47,6 @@ jobs:
           cli-compile-flags: |
             - --board-options
             - "${{ matrix.board_options }}"
-            - --warnings none
           platforms: |
             - name: ${{ matrix.core }}
               version: ${{ matrix.core_version}}
