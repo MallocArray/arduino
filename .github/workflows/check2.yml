@@ -41,8 +41,8 @@ jobs:
           cli-compile-flags: |
             - --board-options ${{ matrix.board_options }}
           platforms: |
-            - name: "esp8266:esp8266"
-            - name: "esp32:esp32"
+            - name: ${{ matrix.core }}
+            - source-url: ${{ matrix.core_url }}
 
 
     #   - run:
