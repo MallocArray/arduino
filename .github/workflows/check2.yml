@@ -5,11 +5,11 @@ jobs:
       fail-fast: false
       matrix:
         example: |
-          - BASIC
-          - TestCO2
-          - TestPM
-          - TestSht
-          - OneOpenAir
+          - "BASIC"
+          - "TestCO2"
+          - "TestPM"
+          - "TestSht"
+          - "OneOpenAir"
         fqbn:
           - "esp8266:esp8266:d1_mini"
           - "esp32:esp32:esp32c3"
@@ -41,8 +41,7 @@ jobs:
             - name: Arduino_JSON@0.2.0
             - name: U8g2@2.34.22
           cli-compile-flags: |
-            - --board-options
-            - ${{ matrix.board_options }}
+            - --board-options ${{ matrix.board_options }}
           platforms: |
             - name: ${{ matrix.core }}
               version: ${{ matrix.core_version}}
