@@ -43,7 +43,7 @@ jobs:
           platforms: |
             # - name: ${{ matrix.core }}
             # - source-url: ${{ matrix.core_url }}
-            - name: esp32:esp32
+            - name: esp8266:esp8266
               version: 3.1.2
               source-url: "https://arduino.esp8266.com/stable/package_esp8266com_index.json"
 
