@@ -31,187 +31,380 @@ CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
 #include "AgConfigure.h"
 #include "AgSchedule.h"
 #include "AgWiFiConnector.h"
+#include "LocalServer.h"
+#include "OpenMetrics.h"
+#include "MqttClient.h"
 #include <AirGradient.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
 #include <WiFiClient.h>
 
-#define WIFI_CONNECT_COUNTDOWN_MAX 180       /** sec */
-#define WIFI_CONNECT_RETRY_MS 10000          /** ms */
-#define LED_BAR_COUNT_INIT_VALUE (-1)        /** */
-#define LED_BAR_ANIMATION_PERIOD 100         /** ms */
-#define DISP_UPDATE_INTERVAL 5000            /** ms */
-#define SERVER_CONFIG_SYNC_INTERVAL 60000    /** ms */
-#define SERVER_SYNC_INTERVAL 60000           /** ms */
-#define SENSOR_CO2_CALIB_COUNTDOWN_MAX 5     /** sec */
-#define SENSOR_TVOC_UPDATE_INTERVAL 1000     /** ms */
-#define SENSOR_CO2_UPDATE_INTERVAL 5000      /** ms */
-#define SENSOR_PM_UPDATE_INTERVAL 5000       /** ms */
-#define SENSOR_TEMP_HUM_UPDATE_INTERVAL 2000 /** ms */
-#define DISPLAY_DELAY_SHOW_CONTENT_MS 2000   /** ms */
-#define WIFI_HOTSPOT_PASSWORD_DEFAULT                                          \
-  "cleanair" /** default WiFi AP password                                      \
-              */
+#define LED_BAR_ANIMATION_PERIOD 100                  /** ms */
+#define DISP_UPDATE_INTERVAL 2500                     /** ms */
+#define SERVER_CONFIG_SYNC_INTERVAL 60000             /** ms */
+#define SERVER_SYNC_INTERVAL 60000                    /** ms */
+#define MQTT_SYNC_INTERVAL 60000                      /** ms */
+#define SENSOR_CO2_CALIB_COUNTDOWN_MAX 5              /** sec */
+#define SENSOR_TVOC_UPDATE_INTERVAL 1000              /** ms */
+#define SENSOR_CO2_UPDATE_INTERVAL 4000               /** ms */
+#define SENSOR_PM_UPDATE_INTERVAL 2000                /** ms */
+#define SENSOR_TEMP_HUM_UPDATE_INTERVAL 6000          /** ms */
+#define DISPLAY_DELAY_SHOW_CONTENT_MS 2000            /** ms */
 
-/** Create airgradient instance for 'DIY_BASIC' board */
-static AirGradient ag = AirGradient(DIY_BASIC);
+static AirGradient ag(DIY_BASIC);
 static Configuration configuration(Serial);
 static AgApiClient apiClient(Serial, configuration);
-static WifiConnector wifiConnector(Serial);
+static Measurements measurements;
+static OledDisplay oledDisplay(configuration, measurements, Serial);
+static StateMachine stateMachine(oledDisplay, Serial, measurements,
+                                 configuration);
+static WifiConnector wifiConnector(oledDisplay, Serial, stateMachine,
+                                   configuration);
+static OpenMetrics openMetrics(measurements, configuration, wifiConnector,
+                               apiClient);
+static LocalServer localServer(Serial, openMetrics, measurements, configuration,
+                               wifiConnector);
+static MqttClient mqttClient(Serial);
 
-static int co2Ppm = -1;
-static int pm25 = -1;
-static float temp = -1001;
-static int hum = -1;
-static long val;
+static AgFirmwareMode fwMode = FW_MODE_I_BASIC_40PS;
+
+static String fwNewVersion;
 
 static void boardInit(void);
 static void failedHandler(String msg);
-static void executeCo2Calibration(void);
-static void updateServerConfiguration(void);
-static void co2Update(void);
-static void pmUpdate(void);
-static void tempHumUpdate(void);
+static void configurationUpdateSchedule(void);
+static void appDispHandler(void);
+static void oledDisplaySchedule(void);
+static void updateTvoc(void);
+static void updatePm(void);
 static void sendDataToServer(void);
-static void dispHandler(void);
-static String getDevId(void);
-static void showNr(void);
+static void tempHumUpdate(void);
+static void co2Update(void);
+static void mdnsInit(void);
+static void initMqtt(void);
+static void factoryConfigReset(void);
+static void wdgFeedUpdate(void);
+static bool sgp41Init(void);
+static void wifiFactoryConfigure(void);
+static void mqttHandle(void);
+static int calculateMaxPeriod(int updateInterval);
+static void setMeasurementMaxPeriod();
 
-bool hasSensorS8 = true;
-bool hasSensorPMS = true;
-bool hasSensorSHT = true;
-int pmFailCount = 0;
-int getCO2FailCount = 0;
+AgSchedule dispLedSchedule(DISP_UPDATE_INTERVAL, oledDisplaySchedule);
 AgSchedule configSchedule(SERVER_CONFIG_SYNC_INTERVAL,
-                          updateServerConfiguration);
-AgSchedule serverSchedule(SERVER_SYNC_INTERVAL, sendDataToServer);
-AgSchedule dispSchedule(DISP_UPDATE_INTERVAL, dispHandler);
+                          configurationUpdateSchedule);
+AgSchedule agApiPostSchedule(SERVER_SYNC_INTERVAL, sendDataToServer);
 AgSchedule co2Schedule(SENSOR_CO2_UPDATE_INTERVAL, co2Update);
-AgSchedule pmsSchedule(SENSOR_PM_UPDATE_INTERVAL, pmUpdate);
+AgSchedule pmsSchedule(SENSOR_PM_UPDATE_INTERVAL, updatePm);
 AgSchedule tempHumSchedule(SENSOR_TEMP_HUM_UPDATE_INTERVAL, tempHumUpdate);
+AgSchedule tvocSchedule(SENSOR_TVOC_UPDATE_INTERVAL, updateTvoc);
+AgSchedule watchdogFeedSchedule(60000, wdgFeedUpdate);
+AgSchedule mqttSchedule(MQTT_SYNC_INTERVAL, mqttHandle);
 
 void setup() {
+  /** Serial for print debug message */
   Serial.begin(115200);
-  showNr();
+  delay(100); /** For bester show log */
+
+  /** Print device ID into log */
+  Serial.println("Serial nr: " + ag.deviceId());
+
+  /** Initialize local configure */
+  configuration.begin();
 
   /** Init I2C */
   Wire.begin(ag.getI2cSdaPin(), ag.getI2cSclPin());
   delay(1000);
 
-  /** Board init */
-  boardInit();
-
-  /** Init AirGradient server */
-  apiClient.begin();
-  apiClient.setAirGradient(&ag);
   configuration.setAirGradient(&ag);
+  oledDisplay.setAirGradient(&ag);
+  stateMachine.setAirGradient(&ag);
   wifiConnector.setAirGradient(&ag);
+  apiClient.setAirGradient(&ag);
+  openMetrics.setAirGradient(&ag);
+  localServer.setAirGraident(&ag);
 
-  /** Show boot display */
-  displayShowText("DIY basic", "Lib:" + ag.getVersion(), "");
-  delay(2000);
+  /** Example set custom API root URL */
+  // apiClient.setApiRoot("https://example.custom.api");
 
-  /** WiFi connect */
-  // connectToWifi();
-  if (wifiConnector.connect()) {
-    if (WiFi.status() == WL_CONNECTED) {
-      sendDataToAg();
+  /** Init sensor */
+  boardInit();
+  setMeasurementMaxPeriod();
 
-      apiClient.fetchServerConfiguration();
-      if (configuration.isCo2CalibrationRequested()) {
-        executeCo2Calibration();
+  // Uncomment below line to print every measurements reading update
+  // measurements.setDebug(true);
+
+  /** Connecting wifi */
+  bool connectToWifi = false;
+
+  connectToWifi = !configuration.isOfflineMode();
+  if (connectToWifi) {
+    apiClient.begin();
+
+    if (wifiConnector.connect()) {
+      if (wifiConnector.isConnected()) {
+        mdnsInit();
+        localServer.begin();
+        initMqtt();
+        sendDataToAg();
+
+        apiClient.fetchServerConfiguration();
+        configSchedule.update();
+        if (apiClient.isFetchConfigureFailed()) {
+          if (apiClient.isNotAvailableOnDashboard()) {
+            stateMachine.displaySetAddToDashBoard();
+            stateMachine.displayHandle(
+                AgStateMachineWiFiOkServerOkSensorConfigFailed);
+          } else {
+            stateMachine.displayClearAddToDashBoard();
+          }
+          delay(DISPLAY_DELAY_SHOW_CONTENT_MS);
+        }
+      } else {
+        if (wifiConnector.isConfigurePorttalTimeout()) {
+          oledDisplay.showRebooting();
+          delay(2500);
+          oledDisplay.setText("", "", "");
+          ESP.restart();
+        }
       }
     }
   }
-  /** Show serial number display */
-  ag.display.clear();
-  ag.display.setCursor(1, 1);
-  ag.display.setText("Warm Up");
-  ag.display.setCursor(1, 15);
-  ag.display.setText("Serial#");
-  ag.display.setCursor(1, 29);
-  String id = getNormalizedMac();
-  Serial.println("Device id: " + id);
-  String id1 = id.substring(0, 9);
-  String id2 = id.substring(9, 12);
-  ag.display.setText("\'" + id1);
-  ag.display.setCursor(1, 40);
-  ag.display.setText(id2 + "\'");
-  ag.display.show();
+  /** Set offline mode without saving, cause wifi is not configured */
+  if (wifiConnector.hasConfigurated() == false) {
+    Serial.println("Set offline mode cause wifi is not configurated");
+    configuration.setOfflineModeWithoutSave(true);
+  }
 
-  delay(5000);
+  /** Show display Warning up */
+  String sn = "SN:" + ag.deviceId();
+  oledDisplay.setText("Warming Up", sn.c_str(), "");
+
+  delay(DISPLAY_DELAY_SHOW_CONTENT_MS);
+
+  Serial.println("Display brightness: " +
+                 String(configuration.getDisplayBrightness()));
+  oledDisplay.setBrightness(configuration.getDisplayBrightness());
+
+  appDispHandler();
 }
 
 void loop() {
+  /** Handle schedule */
+  dispLedSchedule.run();
   configSchedule.run();
-  serverSchedule.run();
-  dispSchedule.run();
-  if (hasSensorS8) {
+  agApiPostSchedule.run();
+
+  if (configuration.hasSensorS8) {
     co2Schedule.run();
   }
-  if (hasSensorPMS) {
+  if (configuration.hasSensorPMS1) {
     pmsSchedule.run();
+    ag.pms5003.handle();
   }
-  if (hasSensorSHT) {
+  if (configuration.hasSensorSHT) {
     tempHumSchedule.run();
   }
+  if (configuration.hasSensorSGP) {
+    tvocSchedule.run();
+  }
 
+  watchdogFeedSchedule.run();
+
+  /** Check for handle WiFi reconnect */
   wifiConnector.handle();
 
-  /** Read PMS on loop */
-  ag.pms5003.handle();
+  /** factory reset handle */
+  // factoryConfigReset();
+
+  /** check that local configura changed then do some action */
+  configUpdateHandle();
+
+  localServer._handle();
+
+  if (configuration.hasSensorSGP) {
+    ag.sgp41.handle();
+  }
+
+  MDNS.update();
+
+  mqttSchedule.run();
+  mqttClient.handle();
+}
+
+static void co2Update(void) {
+  if (!configuration.hasSensorS8) {
+    // Device don't have S8 sensor
+    return;
+  }
+
+  int value = ag.s8.getCo2();
+  if (utils::isValidCO2(value)) {
+    measurements.update(Measurements::CO2, value);
+  } else {
+    measurements.update(Measurements::CO2, utils::getInvalidCO2());
+  }
+}
+
+static void mdnsInit(void) {
+  Serial.println("mDNS init");
+  if (!MDNS.begin(localServer.getHostname().c_str())) {
+    Serial.println("Init mDNS failed");
+    return;
+  }
+
+  MDNS.addService("_airgradient", "_tcp", 80);
+  MDNS.addServiceTxt("_airgradient", "_tcp", "model",
+                     AgFirmwareModeName(fwMode));
+  MDNS.addServiceTxt("_airgradient", "_tcp", "serialno", ag.deviceId());
+  MDNS.addServiceTxt("_airgradient", "_tcp", "fw_ver", ag.getVersion());
+  MDNS.addServiceTxt("_airgradient", "_tcp", "vendor", "AirGradient");
+
+  MDNS.announce();
+}
+
+static void initMqtt(void) {
+  String mqttUri = configuration.getMqttBrokerUri();
+  if (mqttUri.isEmpty()) {
+    Serial.println(
+        "MQTT is not configured, skipping initialization of MQTT client");
+    return;
+  }
+
+  if (mqttClient.begin(mqttUri)) {
+    Serial.println("Successfully connected to MQTT broker");
+  } else {
+    Serial.println("Connection to MQTT broker failed");
+  }
+}
+
+static void wdgFeedUpdate(void) {
+  ag.watchdog.reset();
+  Serial.println("External watchdog feed!");
+}
+
+static bool sgp41Init(void) {
+  ag.sgp41.setNoxLearningOffset(configuration.getNoxLearningOffset());
+  ag.sgp41.setTvocLearningOffset(configuration.getTvocLearningOffset());
+  if (ag.sgp41.begin(Wire)) {
+    Serial.println("Init SGP41 success");
+    configuration.hasSensorSGP = true;
+    return true;
+  } else {
+    Serial.println("Init SGP41 failuire");
+    configuration.hasSensorSGP = false;
+  }
+  return false;
+}
+
+static void wifiFactoryConfigure(void) {
+  WiFi.persistent(true);
+  WiFi.begin("airgradient", "cleanair");
+  WiFi.persistent(false);
+  oledDisplay.setText("Configure WiFi", "connect to", "\'airgradient\'");
+  delay(2500);
+  oledDisplay.setText("Rebooting...", "", "");
+  delay(2500);
+  oledDisplay.setText("", "", "");
+  ESP.restart();
+}
+
+static void mqttHandle(void) {
+  if(mqttClient.isConnected() == false) {
+    mqttClient.connect(String("airgradient-") + ag.deviceId());
+  }
+
+  if (mqttClient.isConnected()) {
+    String payload = measurements.toString(true, fwMode, wifiConnector.RSSI(), ag, configuration);
+    String topic = "airgradient/readings/" + ag.deviceId();
+    if (mqttClient.publish(topic.c_str(), payload.c_str(), payload.length())) {
+      Serial.println("MQTT sync success");
+    } else {
+      Serial.println("MQTT sync failure");
+    }
+  }
 }
 
 static void sendDataToAg() {
-  // delay(1500);
-  if (apiClient.sendPing(wifiConnector.RSSI(), 0)) {
-    // Ping Server succses
+  /** Change oledDisplay and led state */
+  stateMachine.displayHandle(AgStateMachineWiFiOkServerConnecting);
+
+  delay(1500);
+  if (apiClient.sendPing(wifiConnector.RSSI(), measurements.bootCount())) {
+    stateMachine.displayHandle(AgStateMachineWiFiOkServerConnected);
   } else {
-    // Ping server failed
+    stateMachine.displayHandle(AgStateMachineWiFiOkServerConnectFailed);
   }
-  // delay(DISPLAY_DELAY_SHOW_CONTENT_MS);
+  delay(DISPLAY_DELAY_SHOW_CONTENT_MS);
 }
 
-void displayShowText(String ln1, String ln2, String ln3) {
-  char buf[9];
-  ag.display.clear();
-
-  ag.display.setCursor(1, 1);
-  ag.display.setText(ln1);
-  ag.display.setCursor(1, 19);
-  ag.display.setText(ln2);
-  ag.display.setCursor(1, 37);
-  ag.display.setText(ln3);
-
-  ag.display.show();
-  delay(100);
+void dispSensorNotFound(String ss) {
+  oledDisplay.setText("Sensor", ss.c_str(), "not found");
+  delay(2000);
 }
 
 static void boardInit(void) {
-  /** Init SHT sensor */
+  /** Display init */
+  oledDisplay.begin();
+
+  /** Show boot display */
+  Serial.println("Firmware Version: " + ag.getVersion());
+
+  if (ag.isBasic()) {
+    oledDisplay.setText("DIY Basic", ag.getVersion().c_str(), "");
+  } else {
+    oledDisplay.setText("AirGradient ONE",
+                        "FW Version: ", ag.getVersion().c_str());
+  }
+
+  delay(DISPLAY_DELAY_SHOW_CONTENT_MS);
+
+  ag.watchdog.begin();
+
+  /** Show message init sensor */
+  oledDisplay.setText("Sensor", "init...", "");
+
+  /** Init sensor SGP41 */
+  configuration.hasSensorSGP = false;
+  // if (sgp41Init() == false) {
+  //   dispSensorNotFound("SGP41");
+  // }
+
+  /** Init SHT */
   if (ag.sht.begin(Wire) == false) {
-    hasSensorSHT = false;
-    Serial.println("SHT sensor not found");
+    Serial.println("SHTx sensor not found");
+    configuration.hasSensorSHT = false;
+    dispSensorNotFound("SHT");
   }
 
-  /** CO2 init */
+  /** Init S8 CO2 sensor */
   if (ag.s8.begin(&Serial) == false) {
-    Serial.println("CO2 S8 snsor not found");
-    hasSensorS8 = false;
+    Serial.println("CO2 S8 sensor not found");
+    configuration.hasSensorS8 = false;
+    dispSensorNotFound("S8");
   }
 
-  /** PMS init */
+  /** Init PMS5003 */
+  configuration.hasSensorPMS1 = true;
+  configuration.hasSensorPMS2 = false;
   if (ag.pms5003.begin(&Serial) == false) {
     Serial.println("PMS sensor not found");
-    hasSensorPMS = false;
+    configuration.hasSensorPMS1 = false;
+
+    dispSensorNotFound("PMS");
   }
 
-  /** Display init */
-  ag.display.begin(Wire);
-  ag.display.setTextColor(1);
-  ag.display.clear();
-  ag.display.show();
-  delay(100);
+  /** Set S8 CO2 abc days period */
+  if (configuration.hasSensorS8) {
+    if (ag.s8.setAbcPeriod(configuration.getCO2CalibrationAbcDays() * 24)) {
+      Serial.println("Set S8 AbcDays successful");
+    } else {
+      Serial.println("Set S8 AbcDays failure");
+    }
+  }
+
+  localServer.setFwMode(fwMode);
 }
 
 static void failedHandler(String msg) {
@@ -221,181 +414,177 @@ static void failedHandler(String msg) {
   }
 }
 
-static void executeCo2Calibration(void) {
-  /** Count down for co2CalibCountdown secs */
-  for (int i = 0; i < SENSOR_CO2_CALIB_COUNTDOWN_MAX; i++) {
-    displayShowText("CO2 calib.", "after",
-                    String(SENSOR_CO2_CALIB_COUNTDOWN_MAX - i) + " sec");
-    delay(1000);
-  }
-
-  if (ag.s8.setBaselineCalibration()) {
-    displayShowText("Calib", "success", "");
-    delay(1000);
-    displayShowText("Wait to", "complete", "...");
-    int count = 0;
-    while (ag.s8.isBaseLineCalibrationDone() == false) {
-      delay(1000);
-      count++;
-    }
-    displayShowText("Finished", "after", String(count) + " sec");
-    delay(DISPLAY_DELAY_SHOW_CONTENT_MS);
-  } else {
-    displayShowText("Calibration", "failure", "");
-    delay(DISPLAY_DELAY_SHOW_CONTENT_MS);
-  }
-}
-
-static void updateServerConfiguration(void) {
+static void configurationUpdateSchedule(void) {
   if (apiClient.fetchServerConfiguration()) {
-    if (configuration.isCo2CalibrationRequested()) {
-      if (hasSensorS8) {
-        executeCo2Calibration();
-      } else {
-        Serial.println("CO2 S8 not available, calib ignored");
+    configUpdateHandle();
+  }
+}
+
+static void configUpdateHandle() {
+  if (configuration.isUpdated() == false) {
+    return;
+  }
+
+  stateMachine.executeCo2Calibration();
+
+  String mqttUri = configuration.getMqttBrokerUri();
+  if (mqttClient.isCurrentUri(mqttUri) == false) {
+    mqttClient.end();
+    initMqtt();
+  }
+
+  if (configuration.hasSensorSGP) {
+    if (configuration.noxLearnOffsetChanged() ||
+        configuration.tvocLearnOffsetChanged()) {
+      ag.sgp41.end();
+
+      int oldTvocOffset = ag.sgp41.getTvocLearningOffset();
+      int oldNoxOffset = ag.sgp41.getNoxLearningOffset();
+      bool result = sgp41Init();
+      const char *resultStr = "successful";
+      if (!result) {
+        resultStr = "failure";
+      }
+      if (oldTvocOffset != configuration.getTvocLearningOffset()) {
+        Serial.printf("Setting tvocLearningOffset from %d to %d hours %s\r\n",
+                      oldTvocOffset, configuration.getTvocLearningOffset(),
+                      resultStr);
+      }
+      if (oldNoxOffset != configuration.getNoxLearningOffset()) {
+        Serial.printf("Setting noxLearningOffset from %d to %d hours %s\r\n",
+                      oldNoxOffset, configuration.getNoxLearningOffset(),
+                      resultStr);
       }
     }
-    if (configuration.getCO2CalibrationAbcDays() > 0) {
-      if (hasSensorS8) {
-        int newHour = configuration.getCO2CalibrationAbcDays() * 24;
-        Serial.printf("abcDays config: %d days(%d hours)\r\n",
-                      configuration.getCO2CalibrationAbcDays(), newHour);
-        int curHour = ag.s8.getAbcPeriod();
-        Serial.printf("Current config: %d (hours)\r\n", curHour);
-        if (curHour == newHour) {
-          Serial.println("set 'abcDays' ignored");
-        } else {
-          if (ag.s8.setAbcPeriod(configuration.getCO2CalibrationAbcDays() *
-                                 24) == false) {
-            Serial.println("Set S8 abcDays period calib failed");
-          } else {
-            Serial.println("Set S8 abcDays period calib success");
-          }
-        }
+  }
+
+  if (configuration.isDisplayBrightnessChanged()) {
+    oledDisplay.setBrightness(configuration.getDisplayBrightness());
+  }
+
+  appDispHandler();
+}
+
+static void appDispHandler(void) {
+  AgStateMachineState state = AgStateMachineNormal;
+
+  /** Only show display status on online mode. */
+  if (configuration.isOfflineMode() == false) {
+    if (wifiConnector.isConnected() == false) {
+      state = AgStateMachineWiFiLost;
+    } else if (apiClient.isFetchConfigureFailed()) {
+      state = AgStateMachineSensorConfigFailed;
+      if (apiClient.isNotAvailableOnDashboard()) {
+        stateMachine.displaySetAddToDashBoard();
       } else {
-        Serial.println("CO2 S8 not available, set 'abcDays' ignored");
+        stateMachine.displayClearAddToDashBoard();
       }
+    } else if (apiClient.isPostToServerFailed()) {
+      state = AgStateMachineServerLost;
     }
   }
+  stateMachine.displayHandle(state);
 }
 
-static void co2Update() {
-  int value = ag.s8.getCo2();
-  if (value >= 0) {
-    co2Ppm = value;
-    getCO2FailCount = 0;
-    Serial.printf("CO2 index: %d\r\n", co2Ppm);
+static void oledDisplaySchedule(void) {
+
+  appDispHandler();
+}
+
+static void updateTvoc(void) {
+  if (!configuration.hasSensorSGP) {
+    return;
+  }
+
+  measurements.update(Measurements::TVOC, ag.sgp41.getTvocIndex());
+  measurements.update(Measurements::TVOCRaw, ag.sgp41.getTvocRaw());
+  measurements.update(Measurements::NOx, ag.sgp41.getNoxIndex());
+  measurements.update(Measurements::NOxRaw, ag.sgp41.getNoxRaw());
+}
+
+static void updatePm(void) {
+  if (ag.pms5003.connected()) {
+    measurements.update(Measurements::PM01, ag.pms5003.getPm01Ae());
+    measurements.update(Measurements::PM25, ag.pms5003.getPm25Ae());
+    measurements.update(Measurements::PM10, ag.pms5003.getPm10Ae());
+    measurements.update(Measurements::PM03_PC, ag.pms5003.getPm03ParticleCount());
   } else {
-    getCO2FailCount++;
-    Serial.printf("Get CO2 failed: %d\r\n", getCO2FailCount);
-    if (getCO2FailCount >= 3) {
-      co2Ppm = -1;
-    }
+    measurements.update(Measurements::PM01, utils::getInvalidPmValue());
+    measurements.update(Measurements::PM25, utils::getInvalidPmValue());
+    measurements.update(Measurements::PM10, utils::getInvalidPmValue());
+    measurements.update(Measurements::PM03_PC, utils::getInvalidPmValue());
   }
 }
 
-void pmUpdate() {
-  if (ag.pms5003.isFailed() == false) {
-    pm25 = ag.pms5003.getPm25Ae();
-    Serial.printf("PMS2.5: %d\r\n", pm25);
-    pmFailCount = 0;
-  } else {
-    Serial.printf("PM read failed, %d", pmFailCount);
-    pmFailCount++;
-    if (pmFailCount >= 3) {
-      pm25 = -1;
-    }
+static void sendDataToServer(void) {
+  /** Increment bootcount when send measurements data is scheduled */
+  int bootCount = measurements.bootCount() + 1;
+  measurements.setBootCount(bootCount);
+
+  /** Ignore send data to server if postToAirGradient disabled */
+  if (configuration.isPostDataToAirGradient() == false ||
+      configuration.isOfflineMode()) {
+    return;
+  }
+
+  String syncData = measurements.toString(false, fwMode, wifiConnector.RSSI(), ag, configuration);
+  if (apiClient.postToServer(syncData)) {
+    Serial.println();
+    Serial.println(
+        "Online mode and isPostToAirGradient = true: watchdog reset");
+    Serial.println();
   }
 }
 
-static void tempHumUpdate() {
+static void tempHumUpdate(void) {
   if (ag.sht.measure()) {
-    temp = ag.sht.getTemperature();
-    hum = ag.sht.getRelativeHumidity();
-    Serial.printf("Temperature: %0.2f\r\n", temp);
-    Serial.printf("   Humidity: %d\r\n", hum);
+    float temp = ag.sht.getTemperature();
+    float rhum = ag.sht.getRelativeHumidity();
+
+    measurements.update(Measurements::Temperature, temp);
+    measurements.update(Measurements::Humidity, rhum);
+
+    // Update compensation temperature and humidity for SGP41
+    if (configuration.hasSensorSGP) {
+      ag.sgp41.setCompensationTemperatureHumidity(temp, rhum);
+    }
   } else {
-    Serial.println("Meaure SHT failed");
+    measurements.update(Measurements::Temperature, utils::getInvalidTemperature());
+    measurements.update(Measurements::Humidity, utils::getInvalidHumidity());
+    Serial.println("SHT read failed");
   }
 }
 
-static void sendDataToServer() {
-  String wifi = "\"wifi\":" + String(WiFi.RSSI());
-  String rco2 = "";
-  if(co2Ppm >= 0){
-    rco2 = ",\"rco2\":" + String(co2Ppm);
-  }
-  String pm02 = "";
-  if(pm25) {
-    pm02 = ",\"pm02\":" + String(pm25);
-  }
-  String rhum = "";
-  if(hum >= 0){
-    rhum = ",\"rhum\":" + String(rhum);
-  }
-  String payload = "{" + wifi + rco2 + pm02 + rhum + "}";
-
-  if (apiClient.postToServer(payload) == false) {
-    Serial.println("Post to server failed");
+/* Set max period for each measurement type based on sensor update interval*/
+void setMeasurementMaxPeriod() {
+  /// Max period for S8 sensors measurements
+  measurements.maxPeriod(Measurements::CO2, calculateMaxPeriod(SENSOR_CO2_UPDATE_INTERVAL));
+  /// Max period for SGP sensors measurements
+  measurements.maxPeriod(Measurements::TVOC, calculateMaxPeriod(SENSOR_TVOC_UPDATE_INTERVAL));
+  measurements.maxPeriod(Measurements::TVOCRaw, calculateMaxPeriod(SENSOR_TVOC_UPDATE_INTERVAL));
+  measurements.maxPeriod(Measurements::NOx, calculateMaxPeriod(SENSOR_TVOC_UPDATE_INTERVAL));
+  measurements.maxPeriod(Measurements::NOxRaw, calculateMaxPeriod(SENSOR_TVOC_UPDATE_INTERVAL));
+  /// Max period for PMS sensors measurements
+  measurements.maxPeriod(Measurements::PM25, calculateMaxPeriod(SENSOR_PM_UPDATE_INTERVAL));
+  measurements.maxPeriod(Measurements::PM01, calculateMaxPeriod(SENSOR_PM_UPDATE_INTERVAL));
+  measurements.maxPeriod(Measurements::PM10, calculateMaxPeriod(SENSOR_PM_UPDATE_INTERVAL));
+  measurements.maxPeriod(Measurements::PM03_PC, calculateMaxPeriod(SENSOR_PM_UPDATE_INTERVAL));
+  // Temperature and Humidity
+  if (configuration.hasSensorSHT) {
+    /// Max period for SHT sensors measurements
+    measurements.maxPeriod(Measurements::Temperature,
+                           calculateMaxPeriod(SENSOR_TEMP_HUM_UPDATE_INTERVAL));
+    measurements.maxPeriod(Measurements::Humidity,
+                           calculateMaxPeriod(SENSOR_TEMP_HUM_UPDATE_INTERVAL));
+  } else {
+    /// Temp and hum data retrieved from PMS5003T sensor
+    measurements.maxPeriod(Measurements::Temperature,
+                           calculateMaxPeriod(SENSOR_PM_UPDATE_INTERVAL));
+    measurements.maxPeriod(Measurements::Humidity, calculateMaxPeriod(SENSOR_PM_UPDATE_INTERVAL));
   }
 }
 
-static void dispHandler() {
-  String ln1 = "";
-  String ln2 = "";
-  String ln3 = "";
-
-  if (configuration.isPmStandardInUSAQI()) {
-    if (pm25 < 0) {
-      ln1 = "AQI: -";
-    } else {
-      ln1 = "AQI:" + String(ag.pms5003.convertPm25ToUsAqi(pm25));
-    }
-  } else {
-    if (pm25 < 0) {
-      ln1 = "PM :- ug";
-
-    } else {
-      ln1 = "PM :" + String(pm25) + " ug";
-    }
-  }
-  if (co2Ppm > -1001) {
-    ln2 = "CO2:" + String(co2Ppm);
-  } else {
-    ln2 = "CO2: -";
-  }
-
-  String _hum = "-";
-  if (hum > 0) {
-    _hum = String(hum);
-  }
-
-  String _temp = "-";
-
-  if (configuration.isTemperatureUnitInF()) {
-    if (temp > -1001) {
-      _temp = String((temp * 9 / 5) + 32).substring(0, 4);
-    }
-    ln3 = _temp + " " + _hum + "%";
-  } else {
-    if (temp > -1001) {
-      _temp = String(temp).substring(0, 4);
-    }
-    ln3 = _temp + " " + _hum + "%";
-  }
-  displayShowText(ln1, ln2, ln3);
-}
-
-static String getDevId(void) { return getNormalizedMac(); }
-
-static void showNr(void) {
-  Serial.println();
-  Serial.println("Serial nr: " + getDevId());
-}
-
-String getNormalizedMac() {
-  String mac = WiFi.macAddress();
-  mac.replace(":", "");
-  mac.toLowerCase();
-  return mac;
+int calculateMaxPeriod(int updateInterval) {
+  // 0.5 is 50% reduced interval for max period
+  return (SERVER_SYNC_INTERVAL - (SERVER_SYNC_INTERVAL * 0.5)) / updateInterval;
 }

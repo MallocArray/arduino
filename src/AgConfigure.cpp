@@ -1,5 +1,4 @@
 #include "AgConfigure.h"
-#include "Libraries/Arduino_JSON/src/Arduino_JSON.h"
 #if ESP32
 #include "FS.h"
 #include "SPIFFS.h"
@@ -22,6 +21,18 @@ const char *LED_BAR_MODE_NAMES[] = {
     [LedBarModeCO2] = "co2",
 };
 
+const char *PM_CORRECTION_ALGORITHM_NAMES[] = {
+    [Unknown] = "-", // This is only to pass "non-trivial designated initializers" error
+    [None] = "none",
+    [EPA_2021] = "epa_2021",
+    [SLR_PMS5003_20220802] = "slr_PMS5003_20220802",
+    [SLR_PMS5003_20220803] = "slr_PMS5003_20220803",
+    [SLR_PMS5003_20220824] = "slr_PMS5003_20220824",
+    [SLR_PMS5003_20231030] = "slr_PMS5003_20231030",
+    [SLR_PMS5003_20231218] = "slr_PMS5003_20231218",
+    [SLR_PMS5003_20240104] = "slr_PMS5003_20240104",
+};
+
 #define JSON_PROP_NAME(name) jprop_##name
 #define JSON_PROP_DEF(name) const char *JSON_PROP_NAME(name) = #name
 
@@ -41,21 +52,24 @@ JSON_PROP_DEF(displayBrightness);
 JSON_PROP_DEF(co2CalibrationRequested);
 JSON_PROP_DEF(ledBarTestRequested);
 JSON_PROP_DEF(offlineMode);
+JSON_PROP_DEF(monitorDisplayCompensatedValues);
+JSON_PROP_DEF(corrections);
 
-#define jprop_model_default                 ""
-#define jprop_country_default               ""
-#define jprop_pmStandard_default            getPMStandardString(false)
-#define jprop_ledBarMode_default            getLedBarModeName(LedBarMode::LedBarModeCO2)
-#define jprop_abcDays_default               8
-#define jprop_tvocLearningOffset_default    12
-#define jprop_noxLearningOffset_default     12
-#define jprop_mqttBrokerUrl_default         ""
-#define jprop_temperatureUnit_default       "c"
-#define jprop_configurationControl_default  String(CONFIGURATION_CONTROL_NAME[ConfigurationControl::ConfigurationControlBoth])
-#define jprop_postDataToAirGradient_default true
-#define jprop_ledBarBrightness_default      100
-#define jprop_displayBrightness_default     100
-#define jprop_offlineMode_default           false
+#define jprop_model_default                           ""
+#define jprop_country_default                         "TH"
+#define jprop_pmStandard_default                      getPMStandardString(false)
+#define jprop_ledBarMode_default                      getLedBarModeName(LedBarMode::LedBarModeCO2)
+#define jprop_abcDays_default                         8
+#define jprop_tvocLearningOffset_default              12
+#define jprop_noxLearningOffset_default               12
+#define jprop_mqttBrokerUrl_default                   ""
+#define jprop_temperatureUnit_default                 "c"
+#define jprop_configurationControl_default            String(CONFIGURATION_CONTROL_NAME[ConfigurationControl::ConfigurationControlBoth])
+#define jprop_postDataToAirGradient_default           true
+#define jprop_ledBarBrightness_default                100
+#define jprop_displayBrightness_default               100
+#define jprop_offlineMode_default                     false
+#define jprop_monitorDisplayCompensatedValues_default false
 
 JSONVar jconfig;
 
@@ -83,6 +97,112 @@ String Configuration::getLedBarModeName(LedBarMode mode) {
     return String(LED_BAR_MODE_NAMES[LedBarModeCO2]);
   }
   return String("unknown");
+}
+
+PMCorrectionAlgorithm Configuration::matchPmAlgorithm(String algorithm) {
+  // Loop through all algorithm names in the PM_CORRECTION_ALGORITHM_NAMES array
+  // If the input string matches an algorithm name, return the corresponding enum value
+  // Else return Unknown
+
+  const size_t enumSize = SLR_PMS5003_20240104 + 1; // Get the actual size of the enum
+  PMCorrectionAlgorithm result = PMCorrectionAlgorithm::Unknown;
+  
+  // Loop through enum values
+  for (size_t enumVal = 0; enumVal < enumSize; enumVal++) {
+    if (algorithm == PM_CORRECTION_ALGORITHM_NAMES[enumVal]) {
+      result = static_cast<PMCorrectionAlgorithm>(enumVal);
+    }
+  }
+
+  return result;
+}
+
+bool Configuration::updatePmCorrection(JSONVar &json) {
+  if (!json.hasOwnProperty("corrections")) {
+    // TODO: need to response message?
+    Serial.println("corrections not found");
+    return false;
+  }
+
+  JSONVar corrections = json["corrections"];
+  if (!corrections.hasOwnProperty("pm02")) {
+    Serial.println("pm02 not found");
+    return false;
+  }
+
+  JSONVar pm02 = corrections["pm02"];
+  if (!pm02.hasOwnProperty("correctionAlgorithm")) {
+    Serial.println("correctionAlgorithm not found");
+    return false;
+  }
+
+  // TODO: Need to have data type check, with error message response if invalid 
+
+  // Check algorithm
+  String algorithm = pm02["correctionAlgorithm"];
+  PMCorrectionAlgorithm algo = matchPmAlgorithm(algorithm);
+  if (algo == Unknown) {
+    logInfo("Unknown algorithm");
+    return false;
+  }
+  logInfo("Correction algorithm: " + algorithm);
+
+  // If algo is None or EPA_2021, no need to check slr
+  // But first check if pmCorrection different from algo
+  if (algo == None || algo == EPA_2021) {
+    if (pmCorrection.algorithm != algo) {
+      // Deep copy corrections from root to jconfig, so it will be saved later
+      jconfig[jprop_corrections]["pm02"]["correctionAlgorithm"] = algorithm;
+      jconfig[jprop_corrections]["pm02"]["slr"] = JSON.parse("{}"); // Clear slr
+      // Update pmCorrection with new values
+      pmCorrection.algorithm = algo;
+      pmCorrection.changed = true;
+      logInfo("PM2.5 correction updated");
+      return true;
+    }
+
+    return false;
+  }
+
+  // Check if pm02 has slr object
+  if (!pm02.hasOwnProperty("slr")) {
+    Serial.println("slr not found");
+    return false;
+  }
+
+  JSONVar slr = pm02["slr"];
+
+  // Validate required slr properties exist
+  if (!slr.hasOwnProperty("intercept") || !slr.hasOwnProperty("scalingFactor") ||
+      !slr.hasOwnProperty("useEpa2021")) {
+    Serial.println("Missing required slr properties");
+    return false;
+  }
+
+  // arduino_json doesn't support float type, need to cast to double first
+  float intercept = (float)((double)slr["intercept"]);
+  float scalingFactor = (float)((double)slr["scalingFactor"]);
+
+  // Compare with current pmCorrection
+  if (pmCorrection.algorithm == algo && pmCorrection.intercept == intercept &&
+      pmCorrection.scalingFactor == scalingFactor &&
+      pmCorrection.useEPA == (bool)slr["useEpa2021"]) {
+    return false; // No changes needed
+  }
+
+  // Deep copy corrections from root to jconfig, so it will be saved later
+  jconfig[jprop_corrections] = corrections;
+
+  // Update pmCorrection with new values
+  pmCorrection.algorithm = algo;
+  pmCorrection.intercept = intercept;
+  pmCorrection.scalingFactor = scalingFactor;
+  pmCorrection.useEPA = (bool)slr["useEpa2021"];
+  pmCorrection.changed = true;
+
+  // Correction values were updated
+  logInfo("PM2.5 correction updated");
+  return true;
 }
 
 /**
@@ -153,14 +273,28 @@ void Configuration::defaultConfig(void) {
   jconfig[jprop_pmStandard] = jprop_pmStandard_default;
   jconfig[jprop_temperatureUnit] = jprop_temperatureUnit_default;
   jconfig[jprop_postDataToAirGradient] = jprop_postDataToAirGradient_default;
-  jconfig[jprop_ledBarBrightness] = jprop_ledBarBrightness_default;
-  jconfig[jprop_displayBrightness] = jprop_displayBrightness_default;
-  jconfig[jprop_ledBarMode] = jprop_ledBarBrightness_default;
+  if (ag->isOne()) {
+    jconfig[jprop_ledBarBrightness] = jprop_ledBarBrightness_default;
+  }
+  if (ag->isOne() || ag->isPro3_3() || ag->isPro4_2() || ag->isBasic()) {
+    jconfig[jprop_displayBrightness] = jprop_displayBrightness_default;
+  }
+  if (ag->isOne()) {
+    jconfig[jprop_ledBarMode] = jprop_ledBarMode_default;
+  }
   jconfig[jprop_tvocLearningOffset] = jprop_tvocLearningOffset_default;
   jconfig[jprop_noxLearningOffset] = jprop_noxLearningOffset_default;
   jconfig[jprop_abcDays] = jprop_abcDays_default;
   jconfig[jprop_model] = jprop_model_default;
   jconfig[jprop_offlineMode] = jprop_offlineMode_default;
+  jconfig[jprop_monitorDisplayCompensatedValues] = jprop_monitorDisplayCompensatedValues_default;
+
+  // PM2.5 correction
+  pmCorrection.algorithm = None;
+  pmCorrection.changed = false;
+  pmCorrection.intercept = 0;
+  pmCorrection.scalingFactor = 1;
+  pmCorrection.useEPA = false;
 
   saveConfig();
 }
@@ -220,22 +354,25 @@ bool Configuration::begin(void) {
  * @return false Failure
  */
 bool Configuration::parse(String data, bool isLocal) {
-  logInfo("Parse configure: " + data);
+  logInfo("Parsing configuration: " + data);
 
   JSONVar root = JSON.parse(data);
   failedMessage = "";
-  if (root == undefined) {
+  if (root == undefined || JSONVar::typeof_(root) != "object") {
+    logError("Parse configuration failed, JSON invalid (" + JSONVar::typeof_(root) + ")");
     failedMessage = "JSON invalid";
-    logError(failedMessage);
     return false;
   }
-  logInfo("Parse configure success");
+  logInfo("Parse configuration success");
 
   /** Is configuration changed */
   bool changed = false;
 
   /** Get ConfigurationControl */
-  String lasCtrl = jconfig[jprop_configurationControl];
+  String lastCtrl = jconfig[jprop_configurationControl];
+  const char *msg = "Monitor set to accept only configuration from the "
+                    "cloud. Use property configurationControl to change.";
+
   if (isLocal) {
     if (JSON.typeof_(root[jprop_configurationControl]) == "string") {
       String ctrl = root[jprop_configurationControl];
@@ -248,9 +385,21 @@ bool Configuration::parse(String data, bool isLocal) {
           ctrl ==
               String(CONFIGURATION_CONTROL_NAME
                          [ConfigurationControl::ConfigurationControlCloud])) {
-        if (ctrl != lasCtrl) {
+        if (ctrl != lastCtrl) {
           jconfig[jprop_configurationControl] = ctrl;
-          changed = true;
+          saveConfig();
+          configLogInfo(String(jprop_configurationControl), lastCtrl,
+                        jconfig[jprop_configurationControl]);
+        }
+
+        /** Return failed if new "configurationControl" new and old is "cloud" */
+        if (ctrl == String(CONFIGURATION_CONTROL_NAME [ConfigurationControl::ConfigurationControlCloud])) {
+          if(ctrl != lastCtrl) {
+            return true;
+          } else {
+            failedMessage = String(msg);
+            return false;
+          }
         }
       } else {
         failedMessage =
@@ -267,18 +416,11 @@ bool Configuration::parse(String data, bool isLocal) {
       }
     }
 
-    if (changed) {
-      changed = false;
-      saveConfig();
-      configLogInfo(String(jprop_configurationControl), lasCtrl,
-                    jconfig[jprop_configurationControl]);
-    }
-
+    /** Ignore all configuration value if 'configurationControl' is 'cloud' */
     if (jconfig[jprop_configurationControl] ==
         String(CONFIGURATION_CONTROL_NAME
                    [ConfigurationControl::ConfigurationControlCloud])) {
-      failedMessage = "Monitor set to accept only configuration from the "
-                      "cloud. Use property configurationControl to change.";
+      failedMessage = String(msg);
       jsonInvalid();
       return false;
     }
@@ -614,25 +756,54 @@ bool Configuration::parse(String data, bool isLocal) {
     }
   }
 
-  if (JSON.typeof_(root["targetFirmware"]) == "string") {
-    String newVer = root["targetFirmware"];
-    String curVer = String(GIT_VERSION);
-    if (curVer != newVer) {
-      logInfo("Detected new firmware version: " + newVer);
-      otaNewFirmwareVersion = newVer;
-      udpated = true;
-    } else {
-      otaNewFirmwareVersion = String("");
+  if (JSON.typeof_(root[jprop_monitorDisplayCompensatedValues]) == "boolean") {
+    bool value = root[jprop_monitorDisplayCompensatedValues];
+    bool oldValue = jconfig[jprop_monitorDisplayCompensatedValues];
+    if (value != oldValue) {
+      changed = true;
+      jconfig[jprop_monitorDisplayCompensatedValues] = value;
+
+      configLogInfo(String(jprop_monitorDisplayCompensatedValues),
+                    String(oldValue ? "true" : "false"),
+                    String(value ? "true" : "false"));
+    }
+  } else {
+    if (jsonTypeInvalid(root[jprop_monitorDisplayCompensatedValues],
+                        "boolean")) {
+      failedMessage = jsonTypeInvalidMessage(
+          String(jprop_monitorDisplayCompensatedValues), "boolean");
+      jsonInvalid();
+      return false;
     }
   }
 
+  if (ag->getBoardType() == ONE_INDOOR ||
+      ag->getBoardType() == OPEN_AIR_OUTDOOR) {
+    if (JSON.typeof_(root["targetFirmware"]) == "string") {
+      String newVer = root["targetFirmware"];
+      String curVer = String(GIT_VERSION);
+      if (curVer != newVer) {
+        logInfo("Detected new firmware version: " + newVer);
+        otaNewFirmwareVersion = newVer;
+        updated = true;
+      } else {
+        otaNewFirmwareVersion = String("");
+      }
+    }
+  }
+
+  // Corrections
+  if (updatePmCorrection(root)) {
+    changed = true;
+  }
+
   if (changed) {
-    udpated = true;
+    updated = true;
     saveConfig();
     printConfig();
   } else {
     if (ledBarTestRequested || co2CalibrationRequested) {
-      udpated = true;
+      updated = true;
     }
   }
   return true;
@@ -819,8 +990,8 @@ String Configuration::getModel(void) {
 }
 
 bool Configuration::isUpdated(void) {
-  bool updated = this->udpated;
-  this->udpated = false;
+  bool updated = this->updated;
+  this->updated = false;
   return updated;
 }
 
@@ -1065,13 +1236,26 @@ void Configuration::toConfig(const char *buf) {
   }
 
   if (JSON.typeof_(jconfig[jprop_offlineMode]) != "boolean") {
-    isInvalid = true;
-  } else {
-    isInvalid = false;
+    changed = true;
+    jconfig[jprop_offlineMode] = jprop_offlineMode_default;
   }
-  if (isInvalid) {
-    jconfig[jprop_offlineMode] = false;
+
+  /** Validate monitorDisplayCompensatedValues */
+  if (JSON.typeof_(jconfig[jprop_monitorDisplayCompensatedValues]) !=
+      "boolean") {
+    changed = true;
+    jconfig[jprop_monitorDisplayCompensatedValues] =
+        jprop_monitorDisplayCompensatedValues_default;
   }
+
+
+  // Set default first before parsing local config
+  pmCorrection.algorithm = PMCorrectionAlgorithm::None;
+  pmCorrection.intercept = 0;
+  pmCorrection.scalingFactor = 0;
+  pmCorrection.useEPA = false;
+  // Load correction from saved config
+  updatePmCorrection(jconfig);
 
   if (changed) {
     saveConfig();
@@ -1156,6 +1340,10 @@ bool Configuration::isLedBarModeChanged(void) {
   return changed;
 }
 
+bool Configuration::isMonitorDisplayCompensatedValues(void) { 
+  return jconfig[jprop_monitorDisplayCompensatedValues];
+}
+
 bool Configuration::isDisplayBrightnessChanged(void) {
   bool changed = displayBrightnessChanged;
   displayBrightnessChanged = false;
@@ -1166,4 +1354,29 @@ String Configuration::newFirmwareVersion(void) {
   String newFw = otaNewFirmwareVersion;
   otaNewFirmwareVersion = String("");
   return newFw;
+}
+
+bool Configuration::isPMCorrectionChanged(void) {
+  bool changed = pmCorrection.changed;
+  pmCorrection.changed = false;
+  return changed;
+}
+
+/**
+ * @brief Check if PM correction is enabled 
+ * 
+ * @return true if PM correction algorithm is not None, otherwise false
+ */
+bool Configuration::isPMCorrectionEnabled(void) {
+  PMCorrection pmCorrection = getPMCorrection();
+  if (pmCorrection.algorithm == PMCorrectionAlgorithm::None ||
+      pmCorrection.algorithm == PMCorrectionAlgorithm::Unknown) {
+    return false;
+  }
+
+  return true;
+}
+
+Configuration::PMCorrection Configuration::getPMCorrection(void) {
+  return pmCorrection;
 }

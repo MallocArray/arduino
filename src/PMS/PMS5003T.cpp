@@ -1,5 +1,6 @@
 #include "PMS5003T.h"
 #include "Arduino.h"
+#include "../Main/utils.h"
 
 #if defined(ESP8266)
 #include <SoftwareSerial.h>
@@ -66,11 +67,10 @@ bool PMS5003T::begin(void) {
   }
 
 #if defined(ESP8266)
-  bsp->Pms5003.uart_tx_pin;
-  SoftwareSerial *uart =
+  this->_serial =
       new SoftwareSerial(bsp->Pms5003.uart_tx_pin, bsp->Pms5003.uart_rx_pin);
-  uart->begin(9600);
-  if (pms.begin(uart) == false) {
+  this->_serial->begin(9600);
+  if (pms.begin(this->_serial) == false) {
     AgLog("PMS failed");
     return false;
   }
@@ -102,38 +102,82 @@ bool PMS5003T::begin(void) {
     return false;
   }
 #endif
-
+  _ver = pms.getFirmwareVersion();
   this->_isBegin = true;
   return true;
 }
 
 /**
- * @brief Read PM1.0 must call this function after @ref readData success
+ * @brief Read PM1.0
  *
- * @return int PM1.0 index
+ * @return int PM1.0 index (atmospheric environment)
  */
 int PMS5003T::getPm01Ae(void) { return pms.getPM0_1(); }
 
 /**
- * @brief Read PM2.5 must call this function after @ref readData success
+ * @brief Read PM2.5
  *
- * @return int PM2.5 index
+ * @return int PM2.5 index (atmospheric environment)
  */
 int PMS5003T::getPm25Ae(void) { return pms.getPM2_5(); }
 
 /**
- * @brief Read PM10.0 must call this function after @ref readData success
+ * @brief Read PM10.0
  *
- * @return int PM10.0 index
+ * @return int PM10.0 index (atmospheric environment)
  */
 int PMS5003T::getPm10Ae(void) { return pms.getPM10(); }
 
 /**
- * @brief Read PM 0.3 Count must call this function after @ref readData success
+ * @brief Read PM1.0
  *
- * @return int PM 0.3 Count index
+ * @return int PM1.0 index (standard particle)
  */
-int PMS5003T::getPm03ParticleCount(void) { return pms.getCount0_3(); }
+int PMS5003T::getPm01Sp(void) { return pms.getRaw0_1(); }
+
+/**
+ * @brief Read PM2.5
+ *
+ * @return int PM2.5 index (standard particle)
+ */
+int PMS5003T::getPm25Sp(void) { return pms.getRaw2_5(); }
+
+/**
+ * @brief Read PM10
+ *
+ * @return int PM10 index (standard particle)
+ */
+int PMS5003T::getPm10Sp(void) { return pms.getRaw10(); }
+
+/**
+ * @brief Read particle 0.3 count
+ *
+ * @return int particle 0.3 count index
+ */
+int PMS5003T::getPm03ParticleCount(void) {
+  return pms.getCount0_3();
+}
+
+/**
+ * @brief Read particle 0.5 count
+ *
+ * @return int particle 0.5 count index
+ */
+int PMS5003T::getPm05ParticleCount(void) { return pms.getCount0_5(); }
+
+/**
+ * @brief Read particle 1.0 count
+ *
+ * @return int particle 1.0 count index
+ */
+int PMS5003T::getPm01ParticleCount(void) { return pms.getCount1_0(); }
+
+/**
+ * @brief Read particle 2.5 count
+ *
+ * @return int particle 2.5 count index
+ */
+int PMS5003T::getPm25ParticleCount(void) { return pms.getCount2_5(); }
 
 /**
  * @brief Convert PM2.5 to US AQI
@@ -149,7 +193,7 @@ int PMS5003T::convertPm25ToUsAqi(int pm25) { return pms.pm25ToAQI(pm25); }
  * @return float Degree Celcius
  */
 float PMS5003T::getTemperature(void) {
-  return pms.getTemp()/10.0f;
+  return pms.getTemp() / 10.0f;
 }
 
 /**
@@ -158,8 +202,41 @@ float PMS5003T::getTemperature(void) {
  * @return float Percent (%)
  */
 float PMS5003T::getRelativeHumidity(void) {
-  return pms.getHum()/10.0f;
+  return pms.getHum() / 10.0f;
 }
+
+/**
+ * @brief Correct PM2.5
+ *
+ * Reference formula: https://www.airgradient.com/documentation/correction-algorithms/
+ *
+ * @param pm25 PM2.5 raw value
+ * @param humidity Humidity value
+ * @return compensated value
+ */
+float PMS5003T::compensate(float pm25, float humidity) { return pms.compensate(pm25, humidity); }
+
+/**
+ * @brief Get module(s) firmware version
+ * 
+ * @return int Version code
+ */
+int PMS5003T::getFirmwareVersion(void) { return _ver; }
+
+/**
+ * @brief Get sensor error code
+ * 
+ * @return uint8_t 
+ */
+uint8_t PMS5003T::getErrorCode(void) { return pms.getErrorCode(); }
+
+/**
+ * @brief Is sensor connect to device
+ * 
+ * @return true Connected
+ * @return false Removed
+ */
+bool PMS5003T::connected(void) { return pms.connected(); }
 
 /**
  * @brief Check device initialized or not
@@ -192,13 +269,26 @@ void PMS5003T::end(void) {
  * @brief Check and read PMS sensor data. This method should be callack from
  * loop process to continoue check sensor data if it's available
  */
-void PMS5003T::handle(void) { pms.handle(); }
+void PMS5003T::handle(void) { pms.readPackage(this->_serial); }
+
+void PMS5003T::updateFailCount(void) {
+  pms.updateFailCount();
+}
+
+void PMS5003T::resetFailCount(void) {
+  pms.resetFailCount();
+}
 
 /**
- * @brief Get sensor status
- *
- * @return true No problem
- * @return false Communication timeout or sensor has removed
+ * @brief Get fail count
+ * 
+ * @return int 
  */
-bool PMS5003T::isFailed(void) { return pms.isFailed(); }
+int PMS5003T::getFailCount(void) { return pms.getFailCount(); }
 
+/**
+ * @brief Get fail count max
+ * 
+ * @return int 
+ */
+int PMS5003T::getFailCountMax(void) { return pms.getFailCountMax(); }

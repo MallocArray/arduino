@@ -22,6 +22,7 @@ AgApiClient::~AgApiClient() {}
 void AgApiClient::begin(void) {
   getConfigFailed = false;
   postToServerFailed = false;
+  logInfo("Init apiRoot: " + apiRoot);
   logInfo("begin");
 }
 
@@ -44,9 +45,8 @@ bool AgApiClient::fetchServerConfiguration(void) {
     return false;
   }
 
-  String uri =
-      "http://hw.airgradient.com/sensors/airgradient:" + ag->deviceId() +
-      "/one/config";
+  String uri = apiRoot + "/sensors/airgradient:" +
+               ag->deviceId() + "/one/config";
 
   /** Init http client */
 #ifdef ESP8266
@@ -58,14 +58,30 @@ bool AgApiClient::fetchServerConfiguration(void) {
   }
 #else
   HTTPClient client;
-  if (client.begin(uri) == false) {
-    getConfigFailed = true;
-    return false;
+  client.setTimeout(timeoutMs);
+  if (apiRootChanged) {
+    // If apiRoot is changed, assume not using https
+    if (client.begin(uri) == false) {
+      logError("Begin HTTPClient failed (GET)");
+      getConfigFailed = true;
+      return false;
+    }
+  } else {
+    // By default, airgradient using https
+    if (client.begin(uri, AG_SERVER_ROOT_CA) == false) {
+      logError("Begin HTTPClient using tls failed (GET)");
+      getConfigFailed = true;
+      return false;
+    }
   }
 #endif
 
   /** Get data */
   int retCode = client.GET();
+
+  logInfo(String("GET: ") + uri);
+  logInfo(String("Return code: ") + String(retCode));
+
   if (retCode != 200) {
     client.end();
     getConfigFailed = true;
@@ -84,8 +100,6 @@ bool AgApiClient::fetchServerConfiguration(void) {
   /** Get response string */
   String respContent = client.getString();
   client.end();
-
-  // logInfo("Get configuration: " + respContent);
 
   /** Parse configuration and return result */
   return config.parse(respContent, false);
@@ -109,20 +123,39 @@ bool AgApiClient::postToServer(String data) {
     return false;
   }
 
-  String uri =
-      "http://hw.airgradient.com/sensors/airgradient:" + ag->deviceId() +
-      "/measures";
-  logInfo("Post uri: " + uri);
-  logInfo("Post data: " + data);
-
-  WiFiClient wifiClient;
+  String uri = apiRoot + "/sensors/airgradient:" + ag->deviceId() + "/measures";
+#ifdef ESP8266
   HTTPClient client;
-  if (client.begin(wifiClient, uri.c_str()) == false) {
+  WiFiClient wifiClient;
+  if (client.begin(wifiClient, uri) == false) {
+    getConfigFailed = true;
     return false;
   }
+#else
+  HTTPClient client;
+  client.setTimeout(timeoutMs);
+  if (apiRootChanged) {
+    // If apiRoot is changed, assume not using https
+    if (client.begin(uri) == false) {
+      logError("Begin HTTPClient failed (POST)");
+      getConfigFailed = true;
+      return false;
+    }
+  } else {
+    // By default, airgradient using https
+    if (client.begin(uri, AG_SERVER_ROOT_CA) == false) {
+      logError("Begin HTTPClient using tls failed (POST)");
+      getConfigFailed = true;
+      return false;
+    }
+  }
+#endif
   client.addHeader("content-type", "application/json");
   int retCode = client.POST(data);
   client.end();
+
+  logInfo(String("POST: ") + uri);
+  logInfo(String("Return code: ") + String(retCode));
 
   if ((retCode == 200) || (retCode == 429)) {
     postToServerFailed = false;
@@ -176,4 +209,20 @@ bool AgApiClient::sendPing(int rssi, int bootCount) {
   root["wifi"] = rssi;
   root["boot"] = bootCount;
   return postToServer(JSON.stringify(root));
+}
+
+String AgApiClient::getApiRoot() const { return apiRoot; }
+
+void AgApiClient::setApiRoot(const String &apiRoot) {
+  this->apiRootChanged = true;
+  this->apiRoot = apiRoot;
+}
+
+/**
+ * @brief Set http request timeout. (Default: 10s)
+ *
+ * @param timeoutMs
+ */
+void AgApiClient::setTimeout(uint16_t timeoutMs) {
+  this->timeoutMs = timeoutMs;
 }
