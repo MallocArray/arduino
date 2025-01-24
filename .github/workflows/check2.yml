@@ -55,8 +55,6 @@ jobs:
               source-url: ${{ matrix.core_url }}
           enable-deltas-report: true
 
-      - uses: arduino/report-size-deltas@v1
-
       # TODO: at this point it would be a good idea to run some smoke tests on
       # the resulting image (e.g. that it boots successfully and sends metrics)
       # but that would either require a high fidelity device emulator, or a
