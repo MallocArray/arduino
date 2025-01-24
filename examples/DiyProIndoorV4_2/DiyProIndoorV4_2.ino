@@ -73,7 +73,6 @@ static AgFirmwareMode fwMode = FW_MODE_I_42PS;
 static String fwNewVersion;
 
 static void boardInit(void);
-static void failedHandler(String msg);
 static void configurationUpdateSchedule(void);
 static void appDispHandler(void);
 static void oledDisplaySchedule(void);
@@ -247,7 +246,7 @@ void loop() {
   configUpdateHandle();
 
   localServer._handle();
-  
+
   if (configuration.hasSensorSGP) {
     ag.sgp41.handle();
   }
@@ -497,13 +496,6 @@ static void boardInit(void) {
   }
 
   localServer.setFwMode(FW_MODE_I_42PS);
-}
-
-static void failedHandler(String msg) {
-  while (true) {
-    Serial.println(msg);
-    delay(1000);
-  }
 }
 
 static void configurationUpdateSchedule(void) {

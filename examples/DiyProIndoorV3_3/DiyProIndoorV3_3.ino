@@ -72,7 +72,6 @@ static AgFirmwareMode fwMode = FW_MODE_I_33PS;
 static String fwNewVersion;
 
 static void boardInit(void);
-static void failedHandler(String msg);
 static void configurationUpdateSchedule(void);
 static void appDispHandler(void);
 static void oledDisplaySchedule(void);
@@ -457,13 +456,6 @@ static void boardInit(void) {
   }
 
   localServer.setFwMode(FW_MODE_I_33PS);
-}
-
-static void failedHandler(String msg) {
-  while (true) {
-    Serial.println(msg);
-    delay(1000);
-  }
 }
 
 static void configurationUpdateSchedule(void) {

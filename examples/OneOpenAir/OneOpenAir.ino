@@ -96,7 +96,6 @@ static bool ledBarButtonTest = false;
 static String fwNewVersion;
 
 static void boardInit(void);
-static void failedHandler(String msg);
 static void configurationUpdateSchedule(void);
 static void updateDisplayAndLedBar(void);
 static void updateTvoc(void);
@@ -599,7 +598,7 @@ static void displayExecuteOta(OtaHandler::OtaState state, String msg, int proces
         } else {
           Serial.println("Rebooting... " + String(i));
         }
-        
+
         delay(1000);
       }
       oledDisplay.setBrightness(0);
@@ -862,13 +861,6 @@ static void boardInit(void) {
   }
 
   localServer.setFwMode(fwMode);
-}
-
-static void failedHandler(String msg) {
-  while (true) {
-    Serial.println(msg);
-    vTaskDelay(1000);
-  }
 }
 
 static void configurationUpdateSchedule(void) {
