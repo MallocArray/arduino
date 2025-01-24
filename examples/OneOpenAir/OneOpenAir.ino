@@ -133,6 +133,7 @@ void setup() {
 
   for (int i = 0; i < 5120; i++) {
     char temp = pgm_read_byte
+  }
 
   /** Serial for print debug message */
   Serial.begin(115200);
