@@ -6,6 +6,8 @@ jobs:
       matrix:
         example:
           - "BASIC"
+          - "DiyProIndoorV4_2"
+          - "DiyProIndoorV3_3"
           - "TestCO2"
           - "TestPM"
           - "TestSht"
@@ -18,7 +20,7 @@ jobs:
             core: "esp8266:esp8266"
             core_version: "3.1.2"
             core_url: "https://arduino.esp8266.com/stable/package_esp8266com_index.json"
-            board_options: "CPUFreq=80"
+            # board_options: "CPUFreq=80"
           - fqbn: "esp32:esp32:esp32c3"
             core: "esp32:esp32"
             core_version: "2.0.11"
@@ -27,21 +29,25 @@ jobs:
         exclude:
           - example: "BASIC"
             fqbn: "esp32:esp32:esp32c3"
+          - example: "DiyProIndoorV4_2"
+            fqbn: "esp32:esp32:esp32c3"
+          - example: "DiyProIndoorV3_3"
+            fqbn: "esp32:esp32:esp32c3"
           - example: "OneOpenAir"
             fqbn: "esp8266:esp8266:d1_mini"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.1.7 # 4.1.7 is latest
-      - uses: arduino/compile-sketches@v1.1.1
+      - uses: actions/checkout@v4.1.7
+      - uses: arduino/compile-sketches@v1.1.2
         with:
-          cli-version: 0.35.3  # 1.0.0 is latest
+          # cli-version: 0.35.3  # 1.0.0 is latest
           fqbn: ${{ matrix.fqbn }}
           sketch-paths: |
             examples/${{ matrix.example }}
           libraries: |
-            - name: WiFiManager@2.0.16-rc.2
-            - name: Arduino_JSON@0.2.0
-            - name: U8g2@2.34.22
+            # - name: WiFiManager@2.0.16-rc.2
+            # - name: Arduino_JSON@0.2.0
+            # - name: U8g2@2.34.22
             # - name: AirGradient Air Quality Sensor@3.1.3
             - source-path: ./
           cli-compile-flags: |
