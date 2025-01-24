@@ -128,6 +128,11 @@ AgSchedule watchdogFeedSchedule(60000, wdgFeedUpdate);
 AgSchedule checkForUpdateSchedule(FIRMWARE_CHECK_FOR_UPDATE_MS, firmwareCheckForUpdate);
 
 void setup() {
+  char filler[16000];
+  for (int i = 0; i < 16000; i++) {
+    filler[i] = 0;
+  }
+
   /** Serial for print debug message */
   Serial.begin(115200);
   delay(100); /** For bester show log */
