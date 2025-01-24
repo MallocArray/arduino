@@ -45,6 +45,8 @@ jobs:
           libraries: |
             - source-path: ./
           cli-compile-flags: |
+            - --warnings
+            - none
             - --board-options
             - "${{ matrix.board_options }}"
           platforms: |
