@@ -53,8 +53,9 @@ jobs:
             - name: ${{ matrix.core }}
               version: ${{ matrix.core_version}}
               source-url: ${{ matrix.core_url }}
-          enable-deltas-report: "true"
+          enable-deltas-report: true
 
+      - uses: arduino/report-size-deltas@v1
 
       # TODO: at this point it would be a good idea to run some smoke tests on
       # the resulting image (e.g. that it boots successfully and sends metrics)
