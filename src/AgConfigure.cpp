@@ -106,7 +106,7 @@ PMCorrectionAlgorithm Configuration::matchPmAlgorithm(String algorithm) {
 
   const size_t enumSize = SLR_PMS5003_20240104 + 1; // Get the actual size of the enum
   PMCorrectionAlgorithm result = PMCorrectionAlgorithm::Unknown;
-  
+
   // Loop through enum values
   for (size_t enumVal = 0; enumVal < enumSize; enumVal++) {
     if (algorithm == PM_CORRECTION_ALGORITHM_NAMES[enumVal]) {
@@ -136,7 +136,7 @@ bool Configuration::updatePmCorrection(JSONVar &json) {
     return false;
   }
 
-  // TODO: Need to have data type check, with error message response if invalid 
+  // TODO: Need to have data type check, with error message response if invalid
 
   // Check algorithm
   String algorithm = pm02["correctionAlgorithm"];
@@ -434,7 +434,6 @@ bool Configuration::parse(String data, bool isLocal) {
     }
   }
 
-  char temperatureUnit = 0;
   if (JSON.typeof_(root[jprop_country]) == "string") {
     String country = root[jprop_country];
     if (country.length() == 2) {
@@ -1334,13 +1333,13 @@ void Configuration::setOfflineModeWithoutSave(bool offline) {
   _offlineMode = offline;
 }
 
-bool Configuration::isLedBarModeChanged(void) { 
+bool Configuration::isLedBarModeChanged(void) {
   bool changed = _ledBarModeChanged;
   _ledBarModeChanged = false;
   return changed;
 }
 
-bool Configuration::isMonitorDisplayCompensatedValues(void) { 
+bool Configuration::isMonitorDisplayCompensatedValues(void) {
   return jconfig[jprop_monitorDisplayCompensatedValues];
 }
 
@@ -1363,8 +1362,8 @@ bool Configuration::isPMCorrectionChanged(void) {
 }
 
 /**
- * @brief Check if PM correction is enabled 
- * 
+ * @brief Check if PM correction is enabled
+ *
  * @return true if PM correction algorithm is not None, otherwise false
  */
 bool Configuration::isPMCorrectionEnabled(void) {
