@@ -20,7 +20,6 @@ jobs:
             core: "esp8266:esp8266"
             core_version: "3.1.2"
             core_url: "https://arduino.esp8266.com/stable/package_esp8266com_index.json"
-            # board_options: "CPUFreq=80"
           - fqbn: "esp32:esp32:esp32c3"
             core: "esp32:esp32"
             core_version: "2.0.11"
@@ -37,7 +36,7 @@ jobs:
             fqbn: "esp8266:esp8266:d1_mini"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.1.7
+      - uses: actions/checkout@v4.2.2
       - uses: arduino/compile-sketches@v1.1.2
         with:
           # cli-version: 0.35.3  # 1.0.0 is latest
@@ -51,8 +50,8 @@ jobs:
             # - name: AirGradient Air Quality Sensor@3.1.3
             - source-path: ./
           cli-compile-flags: |
-            - --warnings
-            - none
+            # - --warnings
+            # - none
             - --board-options
             - "${{ matrix.board_options }}"
           platforms: |
