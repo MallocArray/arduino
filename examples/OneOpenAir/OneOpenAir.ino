@@ -128,13 +128,6 @@ AgSchedule watchdogFeedSchedule(60000, wdgFeedUpdate);
 AgSchedule checkForUpdateSchedule(FIRMWARE_CHECK_FOR_UPDATE_MS, firmwareCheckForUpdate);
 
 void setup() {
-  // Additional code to consume 5KB of flash memory
-  const char extraFlash[5120] PROGMEM = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
-
-  for (int i = 0; i < 5120; i++) {
-    char temp = pgm_read_byte(&extraFlash[i]);
-  }
-
   /** Serial for print debug message */
   Serial.begin(115200);
   delay(100); /** For bester show log */
