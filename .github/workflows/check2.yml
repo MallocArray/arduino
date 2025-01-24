@@ -39,19 +39,14 @@ jobs:
       - uses: actions/checkout@v4.2.2
       - uses: arduino/compile-sketches@v1.1.2
         with:
-          # cli-version: 0.35.3  # 1.0.0 is latest
           fqbn: ${{ matrix.fqbn }}
           sketch-paths: |
             examples/${{ matrix.example }}
           libraries: |
-            # - name: WiFiManager@2.0.16-rc.2
-            # - name: Arduino_JSON@0.2.0
-            # - name: U8g2@2.34.22
-            # - name: AirGradient Air Quality Sensor@3.1.3
             - source-path: ./
           cli-compile-flags: |
-            # - --warnings
-            # - none
+            - --warnings
+            - none
             - --board-options
             - "${{ matrix.board_options }}"
           platforms: |
@@ -60,28 +55,6 @@ jobs:
               source-url: ${{ matrix.core_url }}
 
 
-    #   - run:
-    #       curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh |
-    #       sh -s 0.35.3
-    #   - run: bin/arduino-cli --verbose core install '${{ matrix.core }}'
-    #       --additional-urls '${{ matrix.core_url }}'
-    #   - run: bin/arduino-cli --verbose lib install
-    #       WiFiManager@2.0.16-rc.2
-    #       Arduino_JSON@0.2.0
-    #       U8g2@2.34.22
-      # In some cases, actions/checkout@v4 will check out a detached HEAD; for
-      # example, this happens on pull request events, where an hypothetical
-      # PR merge commit is checked out. This tends to confuse
-      # `arduino-cli lib install --git-url`, making it fail with errors such as:
-      #   Error installing Git Library: Library install failed: object not found
-      # Create and check out a dummy branch to work around this issue.
-      # - run: git checkout -b check
-
-      # - run: bin/arduino-cli --verbose lib install --git-url .
-      #   env:
-      #     ARDUINO_LIBRARY_ENABLE_UNSAFE_INSTALL: "true"
-      # - run: bin/arduino-cli --verbose compile 'examples/${{ matrix.example }}'
-      #     --fqbn '${{ matrix.fqbn }}' --board-options '${{ matrix.board_options }}'
       # TODO: at this point it would be a good idea to run some smoke tests on
       # the resulting image (e.g. that it boots successfully and sends metrics)
       # but that would either require a high fidelity device emulator, or a
