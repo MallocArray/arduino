@@ -96,6 +96,7 @@ static bool ledBarButtonTest = false;
 static String fwNewVersion;
 
 static void boardInit(void);
+static void failedHandler(String msg);
 static void configurationUpdateSchedule(void);
 static void updateDisplayAndLedBar(void);
 static void updateTvoc(void);
@@ -174,6 +175,98 @@ void setup() {
   // Comment below line to disable debug measurement readings
   measurements.setDebug(true);
 
+  /** Connecting wifi */
+  bool connectToWifi = false;
+  if (ag->isOne()) {
+    /** Show message confirm offline mode, should me perform if LED bar button
+     * test pressed */
+    if (ledBarButtonTest == false) {
+      oledDisplay.setText(
+          "Press now for",
+          configuration.isOfflineMode() ? "online mode" : "offline mode", "");
+      uint32_t startTime = millis();
+      while (true) {
+        if (ag->button.getState() == ag->button.BUTTON_PRESSED) {
+          configuration.setOfflineMode(!configuration.isOfflineMode());
+
+          oledDisplay.setText(
+              "Offline Mode",
+              configuration.isOfflineMode() ? " = True" : "  = False", "");
+          delay(1000);
+          break;
+        }
+        uint32_t periodMs = (uint32_t)(millis() - startTime);
+        if (periodMs >= 3000) {
+          break;
+        }
+      }
+      connectToWifi = !configuration.isOfflineMode();
+    } else {
+      configuration.setOfflineModeWithoutSave(true);
+    }
+  } else {
+    connectToWifi = true;
+  }
+
+  if (connectToWifi) {
+    apiClient.begin();
+
+    if (wifiConnector.connect()) {
+      if (wifiConnector.isConnected()) {
+        mdnsInit();
+        localServer.begin();
+        initMqtt();
+        sendDataToAg();
+
+        #ifdef ESP8266
+          // ota not supported
+        #else
+          firmwareCheckForUpdate();
+          checkForUpdateSchedule.update();
+        #endif
+
+        apiClient.fetchServerConfiguration();
+        configSchedule.update();
+        if (apiClient.isFetchConfigureFailed()) {
+          if (ag->isOne()) {
+            if (apiClient.isNotAvailableOnDashboard()) {
+              stateMachine.displaySetAddToDashBoard();
+              stateMachine.displayHandle(
+                  AgStateMachineWiFiOkServerOkSensorConfigFailed);
+            } else {
+              stateMachine.displayClearAddToDashBoard();
+            }
+          }
+          stateMachine.handleLeds(
+              AgStateMachineWiFiOkServerOkSensorConfigFailed);
+          delay(DISPLAY_DELAY_SHOW_CONTENT_MS);
+        } else {
+          ledBarEnabledUpdate();
+        }
+      } else {
+        if (wifiConnector.isConfigurePorttalTimeout()) {
+          oledDisplay.showRebooting();
+          delay(2500);
+          oledDisplay.setText("", "", "");
+          ESP.restart();
+        }
+      }
+    }
+  }
+  /** Set offline mode without saving, cause wifi is not configured */
+  if (wifiConnector.hasConfigurated() == false) {
+    Serial.println("Set offline mode cause wifi is not configurated");
+    configuration.setOfflineModeWithoutSave(true);
+  }
+
+  /** Show display Warning up */
+  if (ag->isOne()) {
+    oledDisplay.setText("Warming Up", "Serial Number:", ag->deviceId().c_str());
+    delay(DISPLAY_DELAY_SHOW_CONTENT_MS);
+
+    Serial.println("Display brightness: " + String(configuration.getDisplayBrightness()));
+    oledDisplay.setBrightness(configuration.getDisplayBrightness());
+  }
 
   // Update display and led bar after finishing setup to show dashboard
   updateDisplayAndLedBar();
@@ -769,6 +862,13 @@ static void boardInit(void) {
   }
 
   localServer.setFwMode(fwMode);
+}
+
+static void failedHandler(String msg) {
+  while (true) {
+    Serial.println(msg);
+    vTaskDelay(1000);
+  }
 }
 
 static void configurationUpdateSchedule(void) {
