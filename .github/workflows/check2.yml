@@ -54,6 +54,7 @@ jobs:
               version: ${{ matrix.core_version}}
               source-url: ${{ matrix.core_url }}
           enable-deltas-report: true
+          enable-warnings-report: true
 
       # TODO: at this point it would be a good idea to run some smoke tests on
       # the resulting image (e.g. that it boots successfully and sends metrics)
